@@ -1,0 +1,52 @@
+# Windows "downloaded from the internet" metadata
+*:Zone.Identifier
+*.Identifier
+
+# Manuscript / non-code documents
+*.docx
+*.doc
+*.pdf
+# ...but keep the TRIPOD+AI reporting checklist
+!TRIPODAI_checklist.pdf
+
+# Data (restricted access — see README "Data availability")
+*.parquet
+*.csv
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+data/
+!mimic_ids.csv
+
+# Trained models / checkpoints
+*.joblib
+*.model
+*.json.model
+models/
+checkpoints/
+
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Helper scripts used for repo preparation
+_*.sh
+_*.py
