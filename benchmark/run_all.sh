@@ -14,16 +14,19 @@ fi
 mkdir -p "$OUT"
 
 # 1) main analysis: preprocessing exactly as published
+# (feature preparation is skipped if it already finished; the benchmark resumes finished models)
+[[ -f "$OUT/features_published/meta.json" ]] || \
 python "$HERE/prepare_features.py" --muw "$DATA/muw_df.parquet" --cis "$DATA/CIS.parquet" \
        "${MIMIC_ARGS[@]}" --out "$OUT/features_published" 2>&1 | tee "$OUT/prepare_published.log"
 python "$HERE/run_benchmark.py" --features "$OUT/features_published" --out "$OUT/results_published" \
-       --device "$DEVICE" 2>&1 | tee "$OUT/benchmark_published.log"
+       --device "$DEVICE" --resume 2>&1 | tee "$OUT/benchmark_published.log"
 
 # 2) sensitivity analysis: no backward filling of predictors (tabular models only)
+[[ -f "$OUT/features_nobfill/meta.json" ]] || \
 python "$HERE/prepare_features.py" --muw "$DATA/muw_df.parquet" --cis "$DATA/CIS.parquet" \
        "${MIMIC_ARGS[@]}" --no-bfill --no-seq --out "$OUT/features_nobfill" 2>&1 | tee "$OUT/prepare_nobfill.log"
 python "$HERE/run_benchmark.py" --features "$OUT/features_nobfill" --out "$OUT/results_nobfill" \
-       --device "$DEVICE" --models last_hb_binary,last_hb_continuous,logreg,xgb,xgb_calibrated_published \
+       --device "$DEVICE" --resume --models last_hb_binary,last_hb_continuous,logreg,xgb,xgb_calibrated_published \
        2>&1 | tee "$OUT/benchmark_nobfill.log"
 
 # 3) table for the manuscript

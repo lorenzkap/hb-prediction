@@ -54,7 +54,7 @@ def predict(name, model, X, S):
 def fit(name, X, y, w, groups, S, a):
     if name == "lstm":
         return M.LSTMModel(epochs=a.lstm_epochs, batch_size=a.lstm_batch, verbose=2 if a.verbose else 0).fit(
-            np.asarray(S), y, w, groups)
+            S, y, w, groups)
     model = M.make_tabular(name, device=a.device, n_jobs=a.n_jobs)
     return M.fit_tabular(name, model, X, y, w)
 
@@ -81,6 +81,8 @@ def main():
     ap.add_argument("--lstm-epochs", type=int, default=20)
     ap.add_argument("--lstm-batch", type=int, default=2048)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--resume", action="store_true",
+                    help="keep finished (model, fold) / (model, split) results in --out and only run the rest")
     a = ap.parse_args()
 
     names = [m.strip() for m in a.models.split(",") if m.strip()]
@@ -112,13 +114,20 @@ def main():
         pass
 
     # ------------------------- cross-validation --------------------------- #
-    fold_rows = []
+    fold_rows, done_cv = [], set()
+    cv_path = os.path.join(out, "cv_folds.csv")
+    if a.resume and os.path.exists(cv_path):
+        fold_rows = pd.read_csv(cv_path).to_dict("records")
+        done_cv = {(r["model"], int(r["fold"])) for r in fold_rows}
+        print(f"resume: {len(done_cv)} CV results kept", flush=True)
     if not a.no_cv:
         gkf = GroupKFold(n_splits=a.folds)
         for k, (i_tr, i_va) in enumerate(gkf.split(Xtr, ytr, gtr)):
             w = P.transition_weights(tr[P.ENC].to_numpy()[i_tr], ytr[i_tr])
             for n in names:
                 if n == "xgb_calibrated_published" and not a.cv_calibrated:
+                    continue
+                if (n, k) in done_cv:
                     continue
                 t0 = time.time()
                 if n in M.BASELINES:
@@ -133,6 +142,7 @@ def main():
                 print(f"[cv fold {k}] {n:28s} AUROC {r['auroc']:.4f} AUPRC {r['auprc']:.4f} ({r['seconds']} s)", flush=True)
                 pd.DataFrame(fold_rows).to_csv(os.path.join(out, "cv_folds.csv"), index=False)
         cv = pd.DataFrame(fold_rows)
+        cv = cv[cv["model"].isin(names)]
         summ = cv.groupby("model").agg(auroc_mean=("auroc", "mean"), auroc_sd=("auroc", "std"),
                                        auprc_mean=("auprc", "mean"), auprc_sd=("auprc", "std"),
                                        brier_mean=("brier", "mean"), brier_sd=("brier", "std")).reset_index()
@@ -140,8 +150,16 @@ def main():
 
     # --------------------- refit + held-out evaluation -------------------- #
     w_full = P.transition_weights(tr[P.ENC].to_numpy(), ytr)
-    test_rows = []
+    test_rows, done_test = [], set()
+    test_path = os.path.join(out, "test_metrics.csv")
+    if a.resume and os.path.exists(test_path):
+        test_rows = pd.read_csv(test_path).to_dict("records")
+        done_test = {r["model"] for r in test_rows}
+    n_splits = 2 if ext is not None else 1
     for n in names:
+        if n in done_test and sum(r["model"] == n for r in test_rows) == n_splits:
+            continue
+        test_rows = [r for r in test_rows if r["model"] != n]
         t0 = time.time()
         model = None if n in M.BASELINES else fit(n, Xtr, ytr, w_full, gtr, Str if n == "lstm" else None, a)
         for split, tab, X, y, S in [("internal_test", te, Xte, yte, Ste)] + (
@@ -154,6 +172,7 @@ def main():
             print(f"[{split}] {n:28s} AUROC {r['auroc']:.4f} ({r['auroc_lo']:.4f}-{r['auroc_hi']:.4f})", flush=True)
             pd.DataFrame(test_rows).to_csv(os.path.join(out, "test_metrics.csv"), index=False)
     test = pd.DataFrame(test_rows)
+    test = test[test["model"].isin(names)]
 
     # ------------------------------ summary ------------------------------- #
     lines = [f"# Model benchmark ({'published preprocessing' if meta.get('bfill', True) else 'no backward fill'})", "",

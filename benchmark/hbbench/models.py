@@ -81,6 +81,48 @@ def baseline_scores(name, hb_current):
 
 
 # ------------------------------- LSTM ------------------------------------- #
+def _batches(X, y, w, idx, batch_size, mu, sd, shuffle, seed):
+    """Keras data source that normalises and ships one batch at a time, so the
+    (multi-GB) sequence array never has to be copied to the GPU as a whole."""
+    import tensorflow as tf
+
+    class _Seq(tf.keras.utils.Sequence):
+        def __init__(self):
+            try:
+                super().__init__(workers=1, use_multiprocessing=False, max_queue_size=10)
+            except TypeError:  # Keras 2
+                super().__init__()
+            self.idx = np.array(idx)
+            self.rng = np.random.default_rng(seed)
+            if shuffle:
+                self.rng.shuffle(self.idx)
+
+        def __len__(self):
+            return int(np.ceil(len(self.idx) / batch_size))
+
+        def __getitem__(self, i):
+            b = np.sort(self.idx[i * batch_size:(i + 1) * batch_size])
+            xb = ((np.asarray(X[b], dtype=np.float32) - mu) / sd).astype(np.float32)
+            if w is None:
+                return xb, y[b].astype(np.float32)
+            return xb, y[b].astype(np.float32), w[b].astype(np.float32)
+
+        def on_epoch_end(self):
+            if shuffle:
+                self.rng.shuffle(self.idx)
+
+    return _Seq()
+
+
+def _gpu_memory_growth():
+    import tensorflow as tf
+    for g in tf.config.list_physical_devices("GPU"):
+        try:
+            tf.config.experimental.set_memory_growth(g, True)
+        except Exception:
+            pass
+
+
 class LSTMModel:
     """2-layer LSTM (64/32) + dense 32, dropout 0.2 - the architecture of
     modelling_neural.ipynb - with Adam(1e-3), early stopping on the AUROC of a
@@ -90,13 +132,19 @@ class LSTMModel:
         self.epochs, self.batch_size, self.patience, self.seed, self.verbose = epochs, batch_size, patience, seed, verbose
 
     def fit(self, X, y, w, groups):
+        _gpu_memory_growth()
         import tensorflow as tf
         from sklearn.model_selection import GroupShuffleSplit
         tf.keras.utils.set_random_seed(self.seed)
         n, t, c = X.shape
-        self.mu = X.reshape(-1, c).mean(0)
-        self.sd = X.reshape(-1, c).std(0) + 1e-6
-        tr, va = next(GroupShuffleSplit(n_splits=1, test_size=0.1, random_state=self.seed).split(X, y, groups))
+        # channel mean/sd in chunks (float64 accumulation, no full copy)
+        s1 = np.zeros(c); s2 = np.zeros(c); cnt = 0
+        for i in range(0, n, 100_000):
+            ch = np.asarray(X[i:i + 100_000], dtype=np.float64).reshape(-1, c)
+            s1 += ch.sum(0); s2 += (ch ** 2).sum(0); cnt += len(ch)
+        self.mu = (s1 / cnt).astype(np.float32)
+        self.sd = (np.sqrt(np.maximum(s2 / cnt - (s1 / cnt) ** 2, 0)) + 1e-6).astype(np.float32)
+        tr, va = next(GroupShuffleSplit(n_splits=1, test_size=0.1, random_state=self.seed).split(np.zeros(n), y, groups))
         m = tf.keras.Sequential([
             tf.keras.Input((t, c)),
             tf.keras.layers.LSTM(64, return_sequences=True), tf.keras.layers.Dropout(0.2),
@@ -108,18 +156,16 @@ class LSTMModel:
                   metrics=[tf.keras.metrics.AUC(name="auc")])
         es = tf.keras.callbacks.EarlyStopping(monitor="val_auc", mode="max", patience=self.patience,
                                               restore_best_weights=True)
-        m.fit(self._norm(X[tr]), y[tr], sample_weight=w[tr],
-              validation_data=(self._norm(X[va]), y[va]),
-              epochs=self.epochs, batch_size=self.batch_size, callbacks=[es], verbose=self.verbose)
+        train_data = _batches(X, y, w, tr, self.batch_size, self.mu, self.sd, True, self.seed)
+        val_data = _batches(X, y, None, va, 8192, self.mu, self.sd, False, self.seed)
+        m.fit(train_data, validation_data=val_data, epochs=self.epochs, callbacks=[es], verbose=self.verbose)
         self.model = m
         return self
 
-    def _norm(self, X):
-        return ((X - self.mu) / self.sd).astype(np.float32)
-
     def predict_proba(self, X):
         out = []
-        for i in range(0, len(X), 200_000):
-            out.append(self.model.predict(self._norm(X[i:i + 200_000]), batch_size=8192, verbose=0).ravel())
+        for i in range(0, len(X), 100_000):
+            xb = ((np.asarray(X[i:i + 100_000], dtype=np.float32) - self.mu) / self.sd).astype(np.float32)
+            out.append(self.model.predict(xb, batch_size=8192, verbose=0).ravel())
         p = np.concatenate(out)
         return np.c_[1 - p, p]
