@@ -23,6 +23,7 @@ The notebooks form an ordered pipeline. Default settings use an hourly sampling 
 | 6 | [modelling_regression-MUW_only_measured.ipynb](modelling_regression-MUW_only_measured.ipynb) | Train and evaluate the model on ViennaAIdb (internal development/test). |
 | 7 | [modelling_regression-MIMIC_only_measured.ipynb](modelling_regression-MIMIC_only_measured.ipynb) | External validation of the model on MIMIC-IV. |
 | 8 | [plot_distributions.ipynb](plot_distributions.ipynb) · [plot_ROC.ipynb](plot_ROC.ipynb) · [plot_PRC.ipynb](plot_PRC.ipynb) · [plot_calibration.ipynb](plot_calibration.ipynb) | Generate the manuscript figures (cohort distributions, ROC, precision–recall, and calibration curves). |
+| 9 | [benchmark/](benchmark/) | Benchmark of candidate model classes (logistic regression, random forest, XGBoost, LSTM) on identical data with patient-grouped cross-validation, plus a sensitivity analysis without backward filling. See [benchmark/README.md](benchmark/README.md). |
 
 [mimic_ids.csv](mimic_ids.csv) lists the de-identified MIMIC-IV ICU stay identifiers (surrogate keys) that define the external-validation cohort, provided for reproducibility.
 
